@@ -344,7 +344,29 @@
     .result-row{padding:10px 4px;}
     table.report-table{font-size:11px;}
   }
+
+  /* ===== Print ===== */
+  .icon-btn{
+    background:#fff;
+    color:var(--navy);
+    border:1.5px solid var(--navy);
+    padding:9px 14px;
+    border-radius:8px;
+    font-size:12.5px;
+    cursor:pointer;
+    font-family:inherit;
+  }
+  .icon-btn:hover{background:#f3f4f6;}
+  @media print{
+    .no-print{display:none !important;}
+    body{background:#fff;}
+    #content{padding:0; max-width:100%;}
+    .card{box-shadow:none; border:1px solid #ccc; break-inside:avoid;}
+    #report-table-wrap, #summary-table-wrap-louzy, #summary-table-wrap-lotus{max-height:none; overflow:visible;}
+    table.report-table th{background:#eee !important; color:#000 !important; -webkit-print-color-adjust:exact; print-color-adjust:exact;}
+  }
 </style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 
@@ -370,7 +392,7 @@
 
   <!-- ===== APP ===== -->
   <div id="app">
-    <div id="app-header">
+    <div id="app-header" class="no-print">
       <div>
         <h1>بيان النواقص</h1>
         <div class="who" id="who-label"></div>
@@ -378,9 +400,10 @@
       <button id="logout-btn">خروج</button>
     </div>
 
-    <div id="tabs">
+    <div id="tabs" class="no-print">
       <button class="tab-btn active" data-tab="add">🔍 طلب نواقص</button>
       <button class="tab-btn" data-tab="report">📋 تقرير المناديب</button>
+      <button class="tab-btn" data-tab="summary" id="summary-tab-btn" style="display:none;">📦 تجميع لوزى / لوتس</button>
     </div>
 
     <div id="content">
@@ -413,10 +436,12 @@
         <div class="card">
           <h2>ملخص حسب المندوب</h2>
           <div id="rep-summary-cards"></div>
-          <div id="report-filters">
+          <div id="report-filters" class="no-print">
             <select id="rep-filter"></select>
             <input type="text" id="item-filter" placeholder="فلترة بالصنف...">
             <button id="refresh-report-btn">🔄 تحديث</button>
+            <button class="icon-btn" id="print-report-btn">🖨️ طباعة PDF</button>
+            <button class="icon-btn" id="export-report-btn">📊 تصدير Excel</button>
           </div>
           <div id="report-table-wrap">
             <table class="report-table">
@@ -430,10 +455,53 @@
                   <th>المورد</th>
                   <th>الكمية</th>
                   <th>التاريخ</th>
-                  <th></th>
+                  <th class="no-print"></th>
                 </tr>
               </thead>
               <tbody id="report-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tab: Supplier aggregation (admin only) -->
+      <div class="panel" id="panel-summary">
+        <div class="card no-print" style="display:flex; gap:10px; align-items:center;">
+          <button class="icon-btn" id="print-summary-btn">🖨️ طباعة PDF</button>
+          <button class="icon-btn" id="export-summary-btn">📊 تصدير Excel</button>
+        </div>
+        <div class="card">
+          <h2>🔵 لوزى — إجمالي الأصناف المطلوبة</h2>
+          <div id="summary-table-wrap-louzy">
+            <table class="report-table">
+              <thead>
+                <tr>
+                  <th>الصنف</th>
+                  <th>كود التصنيع</th>
+                  <th>الاسم الأجنبي</th>
+                  <th>عدد الطلبات</th>
+                  <th>إجمالي الكمية</th>
+                </tr>
+              </thead>
+              <tbody id="summary-tbody-louzy"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>🟠 لوتس — إجمالي الأصناف المطلوبة</h2>
+          <div id="summary-table-wrap-lotus">
+            <table class="report-table">
+              <thead>
+                <tr>
+                  <th>الصنف</th>
+                  <th>كود التصنيع</th>
+                  <th>الاسم الأجنبي</th>
+                  <th>عدد الطلبات</th>
+                  <th>إجمالي الكمية</th>
+                </tr>
+              </thead>
+              <tbody id="summary-tbody-lotus"></tbody>
             </table>
           </div>
         </div>
@@ -531,11 +599,13 @@
       reportRepFilter = currentUser.name;
     } else {
       reportRepFilter = "__all__";
+      document.getElementById('summary-tab-btn').style.display = '';
     }
 
     loadRequests().then(() => {
       renderMine();
       renderReport();
+      if (currentUser.admin) renderSupplierSummary();
     });
   }
 
@@ -548,6 +618,9 @@
       document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
       if (btn.dataset.tab === 'report'){
         loadRequests().then(renderReport);
+      }
+      if (btn.dataset.tab === 'summary'){
+        loadRequests().then(renderSupplierSummary);
       }
     });
   });
@@ -647,15 +720,15 @@
             <span class="tag price-tag">💰 ${priceText}</span>
           </div>
         </div>
-        <input type="number" class="qty-input" min="1" step="1" value="1" data-idx="${idx}">
+        <input type="number" class="qty-input" min="0.001" step="0.001" value="1" data-idx="${idx}">
         <button class="add-btn" data-idx="${idx}">➕ إضافة</button>
       `;
       wrap.appendChild(row);
 
       row.querySelector('.add-btn').addEventListener('click', (e) => {
         const qtyInput = row.querySelector('.qty-input');
-        const qty = parseInt(qtyInput.value, 10);
-        if (!qty || qty <= 0){
+        const qty = Math.round(parseFloat(qtyInput.value) * 1000) / 1000;
+        if (!qty || qty < 0.001){
           qtyInput.style.borderColor = 'var(--danger)';
           return;
         }
@@ -720,7 +793,7 @@
           <div class="n">${escapeHtml(r.name)} <span style="color:#9aa4b2; font-weight:400;">— ${escapeHtml(r.client || '—')}</span></div>
           <div class="m">${escapeHtml(r.mfg || '—')} · ${new Date(r.ts).toLocaleString('ar-EG', {dateStyle:'short', timeStyle:'short'})}</div>
         </div>
-        <span class="qty-pill">${r.qty}</span>
+        <span class="qty-pill">${fmtQty(r.qty)}</span>
         <button class="del-btn" data-id="${r.id}">حذف</button>
       `;
       row.querySelector('.del-btn').addEventListener('click', () => deleteRequest(r.id));
@@ -740,16 +813,118 @@
     renderReport();
   }
 
+  // ===== Export helpers =====
+  function exportTableToExcel(tbodyId, headers, filenameBase){
+    const tbody = document.getElementById(tbodyId);
+    const rows = [headers];
+    tbody.querySelectorAll('tr').forEach(tr => {
+      const cells = tr.querySelectorAll('td:not(.no-print)');
+      if (cells.length === 0) return;
+      const rowData = Array.from(cells).map(td => td.textContent.trim());
+      // skip empty-state rows (single cell spanning the table)
+      if (cells.length === 1 && rowData[0].length > 0 && tr.querySelector('td[colspan]')) return;
+      rows.push(rowData);
+    });
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'بيانات');
+    const dateStr = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `${filenameBase}_${dateStr}.xlsx`);
+  }
+
+  function exportSupplierSummaryToExcel(){
+    const headers = ['الصنف','كود التصنيع','الاسم الأجنبي','عدد الطلبات','إجمالي الكمية'];
+    const wb = XLSX.utils.book_new();
+
+    ['louzy','lotus'].forEach(key => {
+      const tbodyId = key === 'louzy' ? 'summary-tbody-louzy' : 'summary-tbody-lotus';
+      const sheetName = key === 'louzy' ? 'لوزى' : 'لوتس';
+      const tbody = document.getElementById(tbodyId);
+      const rows = [headers];
+      tbody.querySelectorAll('tr').forEach(tr => {
+        const cells = tr.querySelectorAll('td');
+        if (cells.length === headers.length){
+          rows.push(Array.from(cells).map(td => td.textContent.trim()));
+        }
+      });
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
+
+    const dateStr = new Date().toISOString().slice(0,10);
+    XLSX.writeFile(wb, `تجميع_لوزى_لوتس_${dateStr}.xlsx`);
+  }
+
   // ===== Report tab =====
   document.getElementById('refresh-report-btn').addEventListener('click', () => {
     loadRequests().then(renderReport);
   });
   document.getElementById('item-filter').addEventListener('input', renderReportTable);
 
+  document.getElementById('print-report-btn').addEventListener('click', () => window.print());
+  document.getElementById('export-report-btn').addEventListener('click', () => {
+    exportTableToExcel('report-tbody',
+      ['المندوب','العميل','الصنف','كود التصنيع','الاسم الأجنبي','المورد','الكمية','التاريخ'],
+      'تقرير_النواقص');
+  });
+
   function renderReport(){
     renderRepSummaryCards();
     renderRepFilterDropdown();
     renderReportTable();
+  }
+
+  // ===== Supplier aggregation (لوزى / لوتس) — admin only =====
+  document.getElementById('print-summary-btn').addEventListener('click', () => window.print());
+  document.getElementById('export-summary-btn').addEventListener('click', exportSupplierSummaryToExcel);
+
+  function renderSupplierSummary(){
+    if (!currentUser.admin) return;
+
+    const groups = { 'لوزى': {}, 'لوتس': {} };
+
+    allRequests.forEach(r => {
+      const supplier = (r.supplier === 'لوزى' || r.supplier === 'لوتس') ? r.supplier : null;
+      if (!supplier) return;
+      const key = r.code || (r.mfg + '|' + r.name);
+      if (!groups[supplier][key]){
+        groups[supplier][key] = {
+          name: r.name,
+          mfg: r.mfg,
+          foreign: r.foreign,
+          totalQty: 0,
+          orderCount: 0
+        };
+      }
+      groups[supplier][key].totalQty += Number(r.qty) || 0;
+      groups[supplier][key].orderCount += 1;
+    });
+
+    renderSupplierTable('summary-tbody-louzy', groups['لوزى']);
+    renderSupplierTable('summary-tbody-lotus', groups['لوتس']);
+  }
+
+  function renderSupplierTable(tbodyId, group){
+    const tbody = document.getElementById(tbodyId);
+    const rows = Object.values(group).sort((a, b) => b.totalQty - a.totalQty);
+
+    if (rows.length === 0){
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-note">مفيش أصناف مطلوبة</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = '';
+    rows.forEach(row => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(row.name)}</td>
+        <td>${escapeHtml(row.mfg || '—')}</td>
+        <td>${escapeHtml(row.foreign || '—')}</td>
+        <td>${row.orderCount}</td>
+        <td><strong>${fmtQty(row.totalQty)}</strong></td>
+      `;
+      tbody.appendChild(tr);
+    });
   }
 
   function renderRepSummaryCards(){
@@ -838,15 +1013,21 @@
         <td>${escapeHtml(r.mfg || '—')}</td>
         <td>${escapeHtml(r.foreign || '—')}</td>
         <td>${escapeHtml(r.supplier || '—')}</td>
-        <td>${r.qty}</td>
+        <td>${fmtQty(r.qty)}</td>
         <td>${new Date(r.ts).toLocaleString('ar-EG', {dateStyle:'short', timeStyle:'short'})}</td>
-        <td>${canDelete ? `<button class="del-btn" data-id="${r.id}">حذف</button>` : ''}</td>
+        <td class="no-print">${canDelete ? `<button class="del-btn" data-id="${r.id}">حذف</button>` : ''}</td>
       `;
       if (canDelete){
         tr.querySelector('.del-btn').addEventListener('click', () => deleteRequest(r.id));
       }
       tbody.appendChild(tr);
     });
+  }
+
+  function fmtQty(n){
+    const num = Number(n);
+    if (isNaN(num)) return '0.000';
+    return num.toFixed(3);
   }
 
   function escapeHtml(s){
